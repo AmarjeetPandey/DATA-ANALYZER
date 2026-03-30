@@ -3,3 +3,9 @@ pandas
 pdfplumber
 matplotlib
 seaborn
+nltk
+streamlit as st
+Sklearn.feature_extraction.text import TfidfVectorizer
+Transformers import pipeline
+Sentence_transformers import SentenceTransformer, util
+torch
