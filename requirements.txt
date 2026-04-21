@@ -9,3 +9,4 @@ Sklearn.feature_extraction.text import TfidfVectorizer
 Transformers import pipeline
 Sentence_transformers import SentenceTransformer, util
 torch
+docx import Document

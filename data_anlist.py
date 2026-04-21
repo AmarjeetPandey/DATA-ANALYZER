@@ -191,10 +191,16 @@ if st.button("show marital status count"):
 import nltk
 import pdfplumber
 import streamlit as st
+from docx import Document
 from sklearn.feature_extraction.text import TfidfVectorizer
 from transformers import pipeline
 from sentence_transformers import SentenceTransformer, util
 import torch
+
+# 🔊 HINDI VOICE FEATURE
+from gtts import gTTS
+from deep_translator import GoogleTranslator
+import tempfile
 
 nltk.download('punkt')
 nltk.download('punkt_tab')
@@ -202,8 +208,8 @@ nltk.download('punkt_tab')
 st.title("🧠 Advanced Research Paper Analyzer (Pure ML - Stable)")
 
 uploaded_doc = st.file_uploader(
-    "Upload Research Paper (PDF / TXT)", 
-    type=["pdf", "txt"]
+    "Upload Research Paper (PDF / TXT / DOCX)", 
+    type=["pdf", "txt", "docx"]
 )
 
 # Load models
@@ -214,6 +220,18 @@ def load_models():
     return summarizer, qa_model
 
 summarizer, qa_model = load_models()
+
+# 🔊 Hindi Voice
+def speak_hindi(text):
+    try:
+        hindi_text = GoogleTranslator(source='auto', target='hi').translate(text)
+        tts = gTTS(text=hindi_text, lang='hi', slow=False)
+
+        tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+        tts.save(tmp_file.name)
+        return tmp_file.name
+    except:
+        return None
 
 # Extract text
 def extract_text_from_pdf(file):
@@ -226,9 +244,13 @@ def extract_text_from_pdf(file):
 def extract_text(file):
     if file.type == "application/pdf":
         return extract_text_from_pdf(file)
+
+    elif file.type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+        doc = Document(file)
+        return "\n".join([para.text for para in doc.paragraphs])
+
     else:
         return file.read().decode("utf-8", errors="ignore")
-
 # Chunking
 def chunk_text(text, max_chunk=500):
     words = text.split()
@@ -246,7 +268,26 @@ def generate_summary(text):
 
     return final_summary
 
-# Keywords (TF-IDF based)
+# 🔥 CONCLUSION
+def generate_conclusion(text):
+    sections = extract_sections(text)
+
+    if sections["Conclusion"].strip():
+        return sections["Conclusion"][:800]
+
+    chunks = list(chunk_text(text))
+    combined_text = " ".join(chunks[:5])
+
+    result = summarizer(
+        combined_text,
+        max_length=150,
+        min_length=60,
+        do_sample=False
+    )
+
+    return result[0]['summary_text']
+
+# Keywords
 def extract_keywords(text):
     vec = TfidfVectorizer(stop_words='english', max_features=10)
     X = vec.fit_transform([text])
@@ -281,7 +322,7 @@ def extract_sections(text):
 
     return sections
 
-# Main
+# MAIN
 if uploaded_doc is not None:
     text = extract_text(uploaded_doc)
 
@@ -294,27 +335,68 @@ if uploaded_doc is not None:
         st.write(text[:1000])
 
         if st.button("🚀 Full AI Analysis"):
-
             with st.spinner("Running ML Models..."):
+                st.session_state.summary = generate_summary(text)
+                st.session_state.keywords = extract_keywords(text)
+                st.session_state.sections = extract_sections(text)
+                st.session_state.conclusion = generate_conclusion(text)
 
-                summary = generate_summary(text)
-                keywords = extract_keywords(text)
-                sections = extract_sections(text)
+        if "summary" in st.session_state:
 
             st.subheader("📌 Summary")
-            st.write(summary)
+            st.write(st.session_state.summary)
+
+            if st.button("🔊 Hindi Voice - Summary"):
+                audio = speak_hindi(st.session_state.summary)
+                if audio:
+                    st.audio(audio)
+
+            st.subheader("🧾 Generated Conclusion")
+            st.write(st.session_state.conclusion)
+
+            if st.button("🔊 Hindi Voice - Conclusion"):
+                audio = speak_hindi(st.session_state.conclusion)
+                if audio:
+                    st.audio(audio)
 
             st.subheader("🔑 Keywords")
-            st.write(keywords)
+            st.write(st.session_state.keywords)
+
+            if st.button("🔊 Hindi Voice - Keywords"):
+                audio = speak_hindi(", ".join(st.session_state.keywords))
+                if audio:
+                    st.audio(audio)
 
             st.subheader("📂 Sections")
 
-            for sec in sections:
+            for sec in st.session_state.sections:
                 st.write(f"**{sec}:**")
-                st.write(sections[sec][:500])
+                st.write(st.session_state.sections[sec][:500])
 
-        # 🔥 ADVANCED Q&A (semantic search)
-        user_q = st.text_input("💬 Ask anything from paper")
+                if st.button(f"🔊 Hindi Voice - {sec}", key=f"voice_{sec}"):
+                    audio = speak_hindi(st.session_state.sections[sec][:500])
+                    if audio:
+                        st.audio(audio)
+
+        # 🔥 UPDATED SMART Q&A
+        suggested_questions = [
+            "What is the main idea of the paper?",
+            "Give a detailed summary of the research",
+            "Explain the methodology in detail",
+            "What are the key findings of the paper?",
+            "What problem does this research solve?",
+            "What are the advantages and limitations?",
+            "Explain the conclusion in detail",
+            "What future work is suggested?",
+            "What are the real-world applications?",
+            "Explain this paper in simple language"
+        ]
+
+        user_q = st.selectbox("💬 Ask or select a question", [""] + suggested_questions)
+        custom_q = st.text_input("Or type your own question")
+
+        if custom_q:
+            user_q = custom_q
 
         if user_q:
             sentences = nltk.sent_tokenize(text)
@@ -327,12 +409,36 @@ if uploaded_doc is not None:
                     query_embedding = qa_model.encode(user_q, convert_to_tensor=True)
 
                     scores = util.cos_sim(query_embedding, sentence_embeddings)[0]
-                    top_results = torch.topk(scores, k=3)
+                    top_results = torch.topk(scores, k=8)
 
-                    st.subheader("📖 Answer")
+                    # 🔥 COMBINE CONTEXT
+                    context_text = ""
+                    used = set()
 
                     for idx in top_results[1]:
-                        st.write(sentences[idx])
+                        sentence = sentences[idx]
+
+                        if sentence not in used:
+                            context_text += sentence + " "
+                            used.add(sentence)
+
+                    # 🔥 FINAL LONG ANSWER
+                    final_answer = summarizer(
+                        context_text,
+                        max_length=180,
+                        min_length=100,
+                        do_sample=False
+                    )[0]['summary_text']
+
+                    st.subheader("📖 Answer")
+                    st.write(final_answer)
+
+                    st.session_state.answer = final_answer
+
+                    if st.button("🔊 Hindi Voice - Answer"):
+                        audio = speak_hindi(st.session_state.answer)
+                        if audio:
+                            st.audio(audio)
 
                 except Exception as e:
                     st.error(f"Error: {e}")
